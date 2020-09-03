@@ -105,6 +105,71 @@ function tree_to_lines(current::PhyloTree, prefix::String)
     return (lines, pipe_centre)
 end
 
+using DataFrames
+using DataStructures
+
+# A recursive function that takes PhyloTree as an argument
+# Performs a single tree iteration. While walking from the top to bottom
+# (since we don't have knowledge about leaves), saves the path. When reaching a
+# leaf, iterates through already existing leaves (from the table) and calculates
+# the distance between each pair, then writes results into the table.
+# The distance is calculated by summing all paths until the common ancestor.
+# The ancestor is extracted from using previously collected paths saved in the
+# dictionary (by taking the intersection between two paths). Symmetric table
+# entries are saved simultaneously. Returns the DataFrame table: df
+function cophenetic(node::PhyloTree,path=PhyloTree[],dict=Dict{String,Array{PhyloTree}}(),df=DataFrame())
+    #if the path is empty, we are at root, so start collecting path entries
+    isempty(path) && push!(path,node)
+    #if current node doesn't have children, the node is a leaf
+    if isempty(node.children)
+        #current path from root until the leaf is saved into the dictionary
+        dict[node.name]=copy(path)
+        column_length=length(names(df))
+        values=Float64[]
+        #for each already existing column (leaf)
+        for name in names(df)
+            #if the same node, the distance is 0
+            if name == node.name
+                push!(values,0.0)
+            else
+                #find the lowest common ancestor by getting paths of current pair from the dictionary
+                #and take last element of their intersection
+                common_ancestor=first(intersect(OrderedSet(reverse(dict[name])),OrderedSet(reverse(dict[node.name]))))
+                cur=node
+                sum1=0.0
+                #sum of edges from the first path
+                while cur != common_ancestor
+                    sum1+=cur.dist
+                    cur=cur.mother
+                end
+                cur=dict[name][end]
+                sum2=0.0
+                #sum of edges from the second path
+                while cur != common_ancestor
+                    sum2+=cur.dist
+                    cur=cur.mother
+                end
+                push!(values,sum1+sum2)
+            end
+        end
+        #fill table with symmetric distance values
+        index=column_length+1
+        push!(values,0.0)
+        index!=1 && push!(df,values[begin:index-1])
+        insertcols!(df,index,node.name=>values[begin:index])
+
+    else
+        #iterate though all children of current node
+        for child in node.children
+            #collecting path furter, recurively continue
+            push!(path,child)
+            cophenetic(child,path,dict,df)
+            pop!(path)
+        end
+    end
+    return df
+end
+
 
 spanish = PhyloTree("Spanish", 1.7)
 italian = PhyloTree("Italian", 1.7)
@@ -128,3 +193,4 @@ tree = PhyloTree("root", 0.0)
 add_child!(tree, romance)
 add_child!(tree, germanic)
 print(tree)
+show(cophenetic(tree))
