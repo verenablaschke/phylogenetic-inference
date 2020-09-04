@@ -184,8 +184,81 @@ function lower_triangle_min(matrix)
             end
         end
     end
-    #returns a tuple(tuple(index of row, index of column), min value) 
+    #returns a tuple(tuple(index of row, index of column), min value)
     return (min_row,min_col),min_value
+end
+
+# Uses the neighbour joining algorithm to constructor a phylogenetic tree from
+# a distance table.
+function nj(dist::DataFrame)
+    # TODO work with a copy of dist!
+    # TODO keep track of branches, construct tree
+
+    while size(dist)[1] > 1
+        println("----")
+        @show dist
+        q = create_q(dist)
+        langs = names(dist)
+
+        (min_idx, min) = lower_triangle_min(q)
+        min_idx = sort([i for i in min_idx])
+        @show min_idx
+
+        lang1 = langs[min_idx[1]]
+        lang2 = langs[min_idx[2]]
+        branch = PhyloTree(lang1 * lang2, -1.0)
+        add_child!(branch, PhyloTree(lang1, -1.0))
+        add_child!(branch, PhyloTree(lang2, -1.0))
+        print(branch)
+
+        col = Array{Union{Missing, Float64},1}(undef, length(langs) + 1)
+        col[1] = 0
+        (f, g) =  min_idx
+        dist_fg = dist[f, g]
+        for k in 1:length(langs)
+            if k in min_idx
+                continue
+            end
+            # TODO better checks
+            dist_fk = dist[f, k]
+            if ismissing(dist_fk)
+                dist_fk = dist[k, f]
+            end
+            dist_gk = dist[g, k]
+            if ismissing(dist_gk)
+                dist_gk = dist[k, g]
+            end
+            col[k + 1] = 0.5 * (dist_fk + dist_gk - dist_fg)
+        end
+
+        @show col
+        deleteat!(col, [f + 1, g + 1])
+
+        @show dist
+        foreach((c, v) -> insert!(c, 1, v), eachcol(dist), Array{Float64,1}(undef, length(langs)))
+        # pushfirst!(dist, Array{Union{Missing, Float64},1}(undef, length(langs)))
+        deleterows!(dist, min_idx)
+        deletecols!(dist, min_idx)
+        insertcols!(dist, 1, lang1 * lang2 => col)
+        @show dist
+    end
+
+
+
+end
+
+# Helper function for nj().
+function create_q(dist::DataFrame)
+    langs = names(dist)
+    n = length(langs)
+    q = DataFrame(fill(Union{Float64, Missing}, n), langs, n)
+    for i in 2:n
+        for j in 1:i-1
+            q[i, j] = (n - 2) * dist[i, j] - sum([dist[i, k] for k in range(1, stop=n)]) - sum([dist[j, k] for k in range(1, stop=n)])
+        end
+    end
+    @show q
+    return q
 end
 
 
@@ -210,5 +283,10 @@ add_child!(germanic, gothic)
 tree = PhyloTree("root", 0.0)
 add_child!(tree, romance)
 add_child!(tree, germanic)
-print(tree)
-show(cophenetic(tree))
+
+# println()
+# print(tree)
+# println()
+# show(cophenetic(tree))
+println()
+nj(cophenetic(tree))
