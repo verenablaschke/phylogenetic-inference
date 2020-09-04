@@ -170,6 +170,24 @@ function cophenetic(node::PhyloTree,path=PhyloTree[],dict=Dict{String,Array{Phyl
     return df
 end
 
+#Function that finds the minimum value of the lower triangle in a symmetric matrix
+function lower_triangle_min(matrix)
+    min_value=Inf
+    min_row=0
+    min_col=0
+    for i in 2:size(matrix)[1]
+        for j in 1:i-1
+            if matrix[i,j]<min_value
+                min_value=matrix[i,j]
+                min_row=i
+                min_col=j
+            end
+        end
+    end
+    #returns a tuple(tuple(index of row, index of column), min value) 
+    return (min_row,min_col),min_value
+end
+
 
 spanish = PhyloTree("Spanish", 1.7)
 italian = PhyloTree("Italian", 1.7)
