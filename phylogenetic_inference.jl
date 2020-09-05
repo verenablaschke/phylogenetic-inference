@@ -294,6 +294,50 @@ function equivalent_tables(x::DataFrame, y::DataFrame)
     return true
 end
 
+using RCall
+function generate_random_table(max_cols::Int)
+    n = rand(2:max_cols)
+    langs = [string(i) for i in 1:n]
+    matrix = zeros(n, n)
+    for i in 1:n
+        for j in i + 1:n
+            val = rand(1:0.1:20)
+            matrix[i, j] = val
+            matrix[j, i] = val
+        end
+    end
+    flat = matrix[:]
+    @rput n
+    @rput langs
+    @rput flat
+    R"library(phangorn)"
+    R"d <-as.dist(matrix(c(flat), byrow=T, nrow=n, dimnames=list(langs, langs)))"
+    R"nj.tree <- nj(d)"
+    R"coph <- cophenetic(nj.tree)[langs, langs]"
+    @rget coph
+    coph = DataFrame([langs[i] => coph[:, i] for i in 1:n])
+    df = DataFrame([langs[i] => matrix[:, i] for i in 1:n])
+    return coph, df
+end
+
+# TODO fix bug
+function random_tests(n_trials::Int, mode::String, max_cols=20)
+    for n in 1:n_trials
+        (coph, df) = generate_random_table(max_cols)
+        tree = missing
+        if mode == "nj"
+            tree = nj(df)
+        end
+        match = equivalent_tables(cophenetic(tree), coph)
+        println("Trial $n: $match")
+        if !match
+            println("TEST FAILED")
+            return false
+        end
+    end
+    println("ALL TESTS PASSED")
+    return true
+end
 
 spanish = PhyloTree("Spanish", 1.7)
 italian = PhyloTree("Italian", 1.7)
@@ -326,20 +370,6 @@ println("\n\nThe tree constructed via Neighbour Joining:\n")
 nj_tree = nj(distance_table)
 print(nj_tree)
 println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
-@show equivalent_tables(distance_table,  cophenetic(nj_tree))
+@show equivalent_tables(distance_table, cophenetic(nj_tree))
 
-
-# using RCall
-# R"library(phangorn)"
-# R"taxa <-c('English','Dutch','German','Italian','Spanish')"
-# R"d <-as.dist(matrix(c(0.0,3.0,3.0,8.0,8.0,
-#                        3.0,0.0,2.0,8.0,8.0,
-#                        3.0,2.0,0.0,8.0,8.0,
-#                        8.0,8.0,8.0,0.0,3.4,
-#                        8.0,8.0,8.0,3.4,0.0),byrow=T,nrow=5,dimnames=list(taxa,taxa)))"
-# R"nj.tree <- nj(d)"
-# R"coph <- cophenetic(nj.tree)[taxa,taxa]"
-# R"print(coph)"
-# @rget coph
-# @show coph
-# @show coph == distance_table
+random_tests(10, "nj")
