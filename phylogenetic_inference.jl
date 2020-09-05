@@ -190,75 +190,74 @@ end
 
 # Uses the neighbour joining algorithm to constructor a phylogenetic tree from
 # a distance table.
+# Note that even if the given cophenetic distance table allows for the
+# construction of several different phylogenetic trees, this method returns
+# only a single possible solution.
 function nj(dist::DataFrame)
-    # TODO work with a copy of dist!
-    # TODO keep track of branches, construct tree
+    dist = deepcopy(dist)
+    # Keep track of all branches to assemble a full tree.
+    branches = Dict{String, PhyloTree}(
+        lang => PhyloTree(lang, -1.0) for lang in names(dist))
 
     while size(dist)[1] > 1
-        println("----")
-        @show dist
-        q = create_q(dist)
         langs = names(dist)
+        n = length(langs)
+        # Construct the lower triangle matrix Q.
+        q = DataFrame(fill(Union{Float64, Missing}, n), langs, n)
+        for i in 2:n
+            for j in 1:i-1
+                q[i, j] = (n - 2) * dist[i, j] - sum([dist[i, k] for k in range(1, stop=n)]) - sum([dist[j, k] for k in range(1, stop=n)])
+            end
+        end
 
-        (min_idx, min) = lower_triangle_min(q)
-        min_idx = sort([i for i in min_idx])
-        @show min_idx
+        # The lowest value within Q shows the pair of languages that should be
+        # merged next.
+        merge_idx = lower_triangle_min(q)[1]
+        merge_idx = sort([i for i in merge_idx])
+        (f, g) = merge_idx
 
-        lang1 = langs[min_idx[1]]
-        lang2 = langs[min_idx[2]]
-        branch = PhyloTree(lang1 * lang2, -1.0)
-        add_child!(branch, PhyloTree(lang1, -1.0))
-        add_child!(branch, PhyloTree(lang2, -1.0))
-        print(branch)
+        # Determine the distance of the two branches that should be merged
+        # to the node where they are joined together.
+        dist_fg = dist[f, g]
+        (lang1, lang2) = (langs[f], langs[g])
+        (dist_f, dist_g) = (0.0, 0.0)
+        for k in 1:length(langs)
+            dist_f += dist[f, k]
+            dist_g += dist[g, k]
+        end
+        branches[lang1].dist = 0.5 * dist_fg + (1 / (2 * (length(langs) - 2))) * (dist_f - dist_g)
+        branches[lang2].dist = dist_fg - branches[lang1].dist
 
+        # Update the collection of tree branches.
+        branch = PhyloTree(lang1 * lang2, 0.0)
+        add_child!(branch, branches[lang1])
+        add_child!(branch, branches[lang2])
+        branches[lang1 * lang2] = branch
+        delete!(branches, lang1)
+        delete!(branches, lang2)
+
+        # Find the distances from the newly joint node to all other branches.
         col = Array{Union{Missing, Float64},1}(undef, length(langs) + 1)
         col[1] = 0
-        (f, g) =  min_idx
-        dist_fg = dist[f, g]
         for k in 1:length(langs)
-            if k in min_idx
+            if k in merge_idx
                 continue
             end
-            # TODO better checks
-            dist_fk = dist[f, k]
-            if ismissing(dist_fk)
-                dist_fk = dist[k, f]
-            end
-            dist_gk = dist[g, k]
-            if ismissing(dist_gk)
-                dist_gk = dist[k, g]
-            end
-            col[k + 1] = 0.5 * (dist_fk + dist_gk - dist_fg)
+            col[k + 1] = 0.5 * (dist[f, k] + dist[g, k] - dist_fg)
         end
 
-        @show col
+        # Update the distance matrix: remove the now deprecated entries and add
+        # the row and column vector of the joint node.
         deleteat!(col, [f + 1, g + 1])
-
-        @show dist
-        foreach((c, v) -> insert!(c, 1, v), eachcol(dist), Array{Float64,1}(undef, length(langs)))
-        # pushfirst!(dist, Array{Union{Missing, Float64},1}(undef, length(langs)))
-        deleterows!(dist, min_idx)
-        deletecols!(dist, min_idx)
-        insertcols!(dist, 1, lang1 * lang2 => col)
-        @show dist
+        delete!(dist, merge_idx)  # remove rows
+        select!(dist, Not(merge_idx))  # remove cols
+        insertcols!(dist, 1, lang1 * lang2 => col[2:length(col)])
+        foreach((c, v) -> insert!(c, 1, v), eachcol(dist), col)
     end
 
-
-
-end
-
-# Helper function for nj().
-function create_q(dist::DataFrame)
-    langs = names(dist)
-    n = length(langs)
-    q = DataFrame(fill(Union{Float64, Missing}, n), langs, n)
-    for i in 2:n
-        for j in 1:i-1
-            q[i, j] = (n - 2) * dist[i, j] - sum([dist[i, k] for k in range(1, stop=n)]) - sum([dist[j, k] for k in range(1, stop=n)])
-        end
-    end
-    @show q
-    return q
+    # Only the complete phylogenetic tree is left in the branch collection
+    # at this point.
+    return collect(values(branches))[1]
 end
 
 
@@ -284,9 +283,16 @@ tree = PhyloTree("root", 0.0)
 add_child!(tree, romance)
 add_child!(tree, germanic)
 
-# println()
-# print(tree)
-# println()
-# show(cophenetic(tree))
-println()
-nj(cophenetic(tree))
+println("The original tree:\n")
+print(tree)
+println("\n\nThe corresponding cophenetic table:\n")
+distance_table = cophenetic(tree)
+show(distance_table)
+println("\n\nThe tree constructed via Neighbour Joining:\n")
+nj_tree = nj(distance_table)
+print(nj_tree)
+println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
+# TODO
+@show cophenetic(nj_tree)
+@show nj_tree
+@show cophenetic(nj_tree) == distance_table
