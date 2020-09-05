@@ -225,7 +225,13 @@ function nj(dist::DataFrame)
             dist_f += dist[f, k]
             dist_g += dist[g, k]
         end
-        branches[lang1].dist = 0.5 * dist_fg + (1 / (2 * (length(langs) - 2))) * (dist_f - dist_g)
+        if n > 2
+            branches[lang1].dist = 0.5 * dist_fg + (1 / (2 * (n - 2))) * (dist_f - dist_g)
+        else
+            # Avoid dividing by 0 in the second part of the equation.
+            # dist_f - dist_g = 0 in that case, anyway.
+            branches[lang1].dist = 0.5 * dist_fg
+        end
         branches[lang2].dist = dist_fg - branches[lang1].dist
 
         # Update the collection of tree branches.
@@ -261,6 +267,34 @@ function nj(dist::DataFrame)
 end
 
 
+# Returns a copy of the dataframe with (alphabetically) sorted column names
+# and correspondingly updated cells.
+function sort_dataframe(df::DataFrame)
+    sorted_indices = sortperm(names(df))
+    if sorted_indices == [i for i in 1:length(names(d))]
+        return deepcopy(df)
+    end
+    sorted = df[!, sorted_indices]
+    for i in 1:length(names(df))
+        sorted[!, i] = sorted[!, i][sorted_indices]
+    end
+    return sorted
+end
+
+
+# Returns whether two dataframes are (approximately) identical.
+function equivalent_tables(x::DataFrame, y::DataFrame)
+    # isapprox returns a table with a 1 for each (approximately) identical cell
+    # and a 0 for each different cell.
+    for col in eachcol(isapprox.(sort_dataframe(x), sort_dataframe(y)))
+        if 0 in col
+            return false
+        end
+    end
+    return true
+end
+
+
 spanish = PhyloTree("Spanish", 1.7)
 italian = PhyloTree("Italian", 1.7)
 german = PhyloTree("German", 1.0)
@@ -292,7 +326,20 @@ println("\n\nThe tree constructed via Neighbour Joining:\n")
 nj_tree = nj(distance_table)
 print(nj_tree)
 println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
-# TODO
-@show cophenetic(nj_tree)
-@show nj_tree
-@show cophenetic(nj_tree) == distance_table
+@show equivalent_tables(distance_table,  cophenetic(nj_tree))
+
+
+# using RCall
+# R"library(phangorn)"
+# R"taxa <-c('English','Dutch','German','Italian','Spanish')"
+# R"d <-as.dist(matrix(c(0.0,3.0,3.0,8.0,8.0,
+#                        3.0,0.0,2.0,8.0,8.0,
+#                        3.0,2.0,0.0,8.0,8.0,
+#                        8.0,8.0,8.0,0.0,3.4,
+#                        8.0,8.0,8.0,3.4,0.0),byrow=T,nrow=5,dimnames=list(taxa,taxa)))"
+# R"nj.tree <- nj(d)"
+# R"coph <- cophenetic(nj.tree)[taxa,taxa]"
+# R"print(coph)"
+# @rget coph
+# @show coph
+# @show coph == distance_table
