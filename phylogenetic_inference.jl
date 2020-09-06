@@ -235,10 +235,11 @@ function nj(dist::DataFrame)
         branches[lang2].dist = dist_fg - branches[lang1].dist
 
         # Update the collection of tree branches.
-        branch = PhyloTree(lang1 * lang2, 0.0)
+        new_name = lang1 * "-" * lang2
+        branch = PhyloTree(new_name, 0.0)
         add_child!(branch, branches[lang1])
         add_child!(branch, branches[lang2])
-        branches[lang1 * lang2] = branch
+        branches[new_name] = branch
         delete!(branches, lang1)
         delete!(branches, lang2)
 
@@ -257,7 +258,7 @@ function nj(dist::DataFrame)
         deleteat!(col, [f + 1, g + 1])
         delete!(dist, merge_idx)  # remove rows
         select!(dist, Not(merge_idx))  # remove cols
-        insertcols!(dist, 1, lang1 * lang2 => col[2:length(col)])
+        insertcols!(dist, 1, new_name => col[2:length(col)])
         foreach((c, v) -> insert!(c, 1, v), eachcol(dist), col)
     end
 
@@ -271,7 +272,7 @@ end
 # and correspondingly updated cells.
 function sort_dataframe(df::DataFrame)
     sorted_indices = sortperm(names(df))
-    if sorted_indices == [i for i in 1:length(names(d))]
+    if sorted_indices == [i for i in 1:length(names(df))]
         return deepcopy(df)
     end
     sorted = df[!, sorted_indices]
@@ -295,41 +296,57 @@ function equivalent_tables(x::DataFrame, y::DataFrame)
 end
 
 using RCall
-function generate_random_table(max_cols::Int)
-    n = rand(2:max_cols)
-    langs = [string(i) for i in 1:n]
-    matrix = zeros(n, n)
-    for i in 1:n
-        for j in i + 1:n
-            val = rand(1:0.1:20)
-            matrix[i, j] = val
-            matrix[j, i] = val
-        end
-    end
-    flat = matrix[:]
-    @rput n
-    @rput langs
-    @rput flat
-    R"library(phangorn)"
-    R"d <-as.dist(matrix(c(flat), byrow=T, nrow=n, dimnames=list(langs, langs)))"
-    R"nj.tree <- nj(d)"
-    R"coph <- cophenetic(nj.tree)[langs, langs]"
-    @rget coph
-    coph = DataFrame([langs[i] => coph[:, i] for i in 1:n])
-    df = DataFrame([langs[i] => matrix[:, i] for i in 1:n])
-    return coph, df
-end
-
-# TODO fix bug
+# Generates distance matrices and uses them to compare our tree-joining methods
+# to the implementations in the R library phangorn.
+# Arguments:
+# - n_trials: number of trial runs
+# - mode: either "upgma" or "nj"
+# - max_cols: each distance table will have between 3 and `max_cols` taxa
+# Returns whether *all* tests passed.
 function random_tests(n_trials::Int, mode::String, max_cols=20)
-    for n in 1:n_trials
-        (coph, df) = generate_random_table(max_cols)
-        tree = missing
+    for trial in 1:n_trials
+        # Create a random distance table.
+        n_cols = rand(3:max_cols)
+        langs = [string(i) for i in 1:n_cols]
+        matrix = zeros(n_cols, n_cols)
+        for i in 1:n_cols
+            for j in i + 1:n_cols
+                val = rand(1:0.1:20)
+                matrix[i, j] = val
+                matrix[j, i] = val
+            end
+        end
+
+        # In R, create a tree and get its cophenetic matrix.
+        flat = matrix[:]
+        @rput n_cols
+        @rput langs
+        @rput flat
+        R"library(phangorn)"
+        R"d <-as.dist(matrix(c(flat), byrow=T, nrow=n_cols,
+                             dimnames=list(langs, langs)))"
+        if mode == "nj"
+            R"tree <- nj(d)"
+        elseif mode == "upgma"
+            R"tree <- upgma(d)"
+        end
+        R"coph <- cophenetic(tree)[langs, langs]"
+        @rget coph
+        coph_r = DataFrame([langs[i] => coph[:, i] for i in 1:n_cols])
+
+        # Construct the tree and cophenetic matrix with our code.
+        df = DataFrame([langs[i] => matrix[:, i] for i in 1:n_cols])
         if mode == "nj"
             tree = nj(df)
+        elseif mode == "upgma"
+            # TODO uncomment
+            # tree = upgma(df)
         end
-        match = equivalent_tables(cophenetic(tree), coph)
-        println("Trial $n: $match")
+        coph_jl = cophenetic(tree)
+
+        # Check for equivalence.
+        match = equivalent_tables(coph_r, coph_jl)
+        println("Trial $trial ($n_cols taxa): $match")
         if !match
             println("TEST FAILED")
             return false
@@ -371,5 +388,7 @@ nj_tree = nj(distance_table)
 print(nj_tree)
 println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
 @show equivalent_tables(distance_table, cophenetic(nj_tree))
-
-random_tests(10, "nj")
+# println("\n\nComparing our UPGMA method to that in phangorn (R):\n")
+# random_tests(50, "upgma")
+println("\n\nComparing our Neighbour Joining method to that in phangorn (R):\n")
+random_tests(50, "nj")
