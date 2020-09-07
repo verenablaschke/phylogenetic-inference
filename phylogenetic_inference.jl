@@ -10,7 +10,7 @@ function PhyloTree(name::String=nm, dist=1.0)
     PhyloTree(name, dist, PhyloTree[], missing)
 end
 
-export PhyloTree|
+export PhyloTree
 end
 
 using .TreeDefinition
@@ -360,38 +360,46 @@ function equivalent_tables(x::DataFrame, y::DataFrame)
     return true
 end
 
+
 using RCall
 # Generates distance matrices and uses them to compare our tree-joining methods
 # to the implementations in the R library phangorn.
 # Arguments:
 # - n_trials: number of trial runs
 # - mode: either "upgma" or "nj"
-# - max_cols: each distance table will have between 3 and `max_cols` taxa
+# - min_taxa, max_taxa: boundaries for generating random tree
 # Returns whether *all* tests passed.
-function random_tests(n_trials::Int, mode::String, max_cols=20)
+function random_tests(n_trials::Int, mode::String, min_taxa=3, max_taxa=20,
+                      verbose=false)
     for trial in 1:n_trials
-        # Create a random distance table.
-        n_cols = rand(3:max_cols)
-        langs = [string(i) for i in 1:n_cols]
-
-        matrix = zeros(n_cols, n_cols)
-        for i in 1:n_cols
-            for j in i + 1:n_cols
-                val = rand(1:0.1:20)
-                matrix[i, j] = val
-                matrix[j, i] = val
+        # Create a random distance table. The table is inferred from a random
+        # tree in order to guarantee that the distances can be used to infer a
+        # tree without any triangle inequalities (e.g. if nodes A and B are both
+        # very similar to node C but simultaneously very dissimilar to one
+        # another).
+        root = PhyloTree("root", 0.0)
+        queue = [root]
+        n_nodes = 1
+        n_leaves = 1
+        while length(queue) > 0 && n_leaves < max_taxa
+            branch = popfirst!(queue)
+            if (n_leaves < min_taxa) || (rand(1:2) > 1)
+                for i in 1:2
+                    child = PhyloTree(string(n_nodes), rand(1:0.1:20))
+                    add_child!(branch, child)
+                    push!(queue, child)
+                    n_nodes += 1
+                end
+                # Turn a leaf node into a middle node, add two new leaves.
+                n_leaves += 1
             end
         end
-
-        #df=DataFrame(german=[0,2,3,8,8,3],dutch=[2,0,3,8,8,3],english=[3,3,0,8,8,3],spanish=[8,8,8,0,3.4,6],italian=[8,8,8,3.4,0,6],gothic=[3,3,3,6,6,0])
-        #df=DataFrame(A=[],B=[],C=[],D=[],E=[],F=[],G=[],H=[])
-
-        # matrix=convert(Matrix{Float64}, df)
-        # langs = [i for i in names(df)]
-        # n_cols = length(langs)
+        matrix = cophenetic(root)
 
         # In R, create a tree and get its cophenetic matrix.
-        flat = matrix[:]
+        langs = names(matrix)
+        flat = convert(Matrix, matrix)[:]
+        n_cols = length(langs)
         @rput n_cols
         @rput langs
         @rput flat
@@ -406,24 +414,20 @@ function random_tests(n_trials::Int, mode::String, max_cols=20)
         R"coph <- cophenetic(tree)[langs, langs]"
         @rget coph
         coph_r = DataFrame([langs[i] => coph[:, i] for i in 1:n_cols])
-        # println("===================================================")
-        # println("R:")
-        # println(coph_r)
 
         # Construct the tree and cophenetic matrix with our code.
-        df = DataFrame([langs[i] => matrix[:, i] for i in 1:n_cols])
         if mode == "nj"
-            tree = nj(df)
+            tree = nj(matrix)
         elseif mode == "upgma"
-            tree = upgma(df)
+            tree = upgma(matrix)
         end
         coph_jl = cophenetic(tree)
-        # println("Julia:")
-        # println(coph_jl)
 
         # Check for equivalence.
         match = equivalent_tables(coph_r, coph_jl)
-        println("Trial $trial ($n_cols taxa): $match")
+        if verbose
+            println("Trial $trial ($n_cols taxa): $match")
+        end
         if !match
             println("TEST FAILED")
             return false
@@ -460,11 +464,20 @@ print(tree)
 println("\n\nThe corresponding cophenetic table:\n")
 distance_table = cophenetic(tree)
 show(distance_table)
+println("\n\nThe tree constructed via UPGMA:\n")
+upgma_tree = upgma(distance_table)
+print(upgma_tree)
+println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
+@show equivalent_tables(distance_table, cophenetic(upgma_tree))
+@show sort_dataframe(distance_table)
+@show sort_dataframe(cophenetic(upgma_tree))
+@show isapprox.(sort_dataframe(distance_table), sort_dataframe(cophenetic(upgma_tree)))
 println("\n\nThe tree constructed via Neighbour Joining:\n")
 nj_tree = nj(distance_table)
 print(nj_tree)
 println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
 @show equivalent_tables(distance_table, cophenetic(nj_tree))
 println("\n\nComparing our UPGMA method to that in phangorn (R):\n")
-random_tests(50, "upgma")
-random_tests(50, "nj")
+random_tests(500, "upgma")
+println("\n\nComparing our NJ method to that in phangorn (R):\n")
+random_tests(500, "nj")
