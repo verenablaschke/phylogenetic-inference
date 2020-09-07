@@ -10,7 +10,7 @@ function PhyloTree(name::String=nm, dist=1.0)
     PhyloTree(name, dist, PhyloTree[], missing)
 end
 
-export PhyloTree
+export PhyloTree|
 end
 
 using .TreeDefinition
@@ -267,6 +267,71 @@ function nj(dist::DataFrame)
     return collect(values(branches))[1]
 end
 
+function upgma(df::DataFrame)
+    matrix=convert(Matrix{Float64}, df)
+    nodes=names(df)
+    #a dictionary that maps name to its corresponding tree, amount of children and the sum of lengths
+    tree_map=Dict{String,Tuple{PhyloTree,Int64,Float64}}()
+    while length(matrix)>1
+        #finding the minimum value of lower triangle
+        (min_row, min_col), min_value = lower_triangle_min(matrix)
+        #distance must be equal for both connected nodes
+        new_dist=min_value/2
+        #constructing tree elements for new nodes
+        #if they exist in a map, they are connecting intermediate nodes for which tree representation already exist
+        #if not, they are leaves, create tree representation
+        #storing n,n1 and n2 for the number of children in a tree, and sum - the sum of branches divided by two
+        name_a=nodes[min_row]
+        name_b=nodes[min_col]
+        a=PhyloTree(name_a,new_dist)
+        b=PhyloTree(name_b,new_dist)
+        n=2
+        n1=1
+        n2=1
+        if haskey(tree_map,name_a)
+            a, n1, sum = tree_map[name_a]
+            n+=n1-1
+            #a new distance is determined by half of the matrix distance, minus existing children's distance
+            a.dist=new_dist-sum
+            delete!(tree_map,name_a)
+        end
+        if haskey(tree_map,name_b)
+            b, n2, sum = tree_map[name_b]
+            n+=n2-1
+            b.dist=new_dist-sum
+            delete!(tree_map,nodes[min_col])
+        end
+        #add a new connecting node into the map
+        new_name=a.name * "-" * b.name
+        connect = PhyloTree(new_name, 0.0)
+        add_child!(connect, a)
+        add_child!(connect, b)
+        tree_map[new_name]=(connect,n,new_dist)
+        nodes[min_col]=new_name
+        deleteat!(nodes, min_row)
+
+        #collect new distances
+        new_row=Float64[]
+        for (i,val) in enumerate(matrix[min_row,:])
+            if i==min_col
+                push!(new_row,0.0)
+            elseif i!=min_row
+                #the value is averaged
+                push!(new_row,(matrix[min_row,i]*n1+matrix[min_col,i]*n2)/(n1+n2))
+            end
+        end
+        #update matrix in a symmetric fashion
+        #remove a column and a row, replace another column and a row with new values
+        matrix = matrix[1:end .!= min_row, 1:end .!= min_row]
+        matrix[min_col,:]=new_row
+        matrix[:,min_col]=new_row
+    end
+    #the only remaining element of a map is a root of a tree
+    tree=collect(values(tree_map))[1][1]
+    tree.name="root"
+    return tree
+end
+
 
 # Returns a copy of the dataframe with (alphabetically) sorted column names
 # and correspondingly updated cells.
@@ -308,6 +373,7 @@ function random_tests(n_trials::Int, mode::String, max_cols=20)
         # Create a random distance table.
         n_cols = rand(3:max_cols)
         langs = [string(i) for i in 1:n_cols]
+
         matrix = zeros(n_cols, n_cols)
         for i in 1:n_cols
             for j in i + 1:n_cols
@@ -316,6 +382,13 @@ function random_tests(n_trials::Int, mode::String, max_cols=20)
                 matrix[j, i] = val
             end
         end
+
+        #df=DataFrame(german=[0,2,3,8,8,3],dutch=[2,0,3,8,8,3],english=[3,3,0,8,8,3],spanish=[8,8,8,0,3.4,6],italian=[8,8,8,3.4,0,6],gothic=[3,3,3,6,6,0])
+        #df=DataFrame(A=[],B=[],C=[],D=[],E=[],F=[],G=[],H=[])
+
+        # matrix=convert(Matrix{Float64}, df)
+        # langs = [i for i in names(df)]
+        # n_cols = length(langs)
 
         # In R, create a tree and get its cophenetic matrix.
         flat = matrix[:]
@@ -333,16 +406,20 @@ function random_tests(n_trials::Int, mode::String, max_cols=20)
         R"coph <- cophenetic(tree)[langs, langs]"
         @rget coph
         coph_r = DataFrame([langs[i] => coph[:, i] for i in 1:n_cols])
+        # println("===================================================")
+        # println("R:")
+        # println(coph_r)
 
         # Construct the tree and cophenetic matrix with our code.
         df = DataFrame([langs[i] => matrix[:, i] for i in 1:n_cols])
         if mode == "nj"
             tree = nj(df)
         elseif mode == "upgma"
-            # TODO uncomment
-            # tree = upgma(df)
+            tree = upgma(df)
         end
         coph_jl = cophenetic(tree)
+        # println("Julia:")
+        # println(coph_jl)
 
         # Check for equivalence.
         match = equivalent_tables(coph_r, coph_jl)
@@ -388,7 +465,6 @@ nj_tree = nj(distance_table)
 print(nj_tree)
 println("\nThe cophenetic table inferred from this tree is identical to the original matrix:")
 @show equivalent_tables(distance_table, cophenetic(nj_tree))
-# println("\n\nComparing our UPGMA method to that in phangorn (R):\n")
-# random_tests(50, "upgma")
-println("\n\nComparing our Neighbour Joining method to that in phangorn (R):\n")
+println("\n\nComparing our UPGMA method to that in phangorn (R):\n")
+random_tests(50, "upgma")
 random_tests(50, "nj")
